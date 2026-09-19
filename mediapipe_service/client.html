@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Sign Language Landmark Extractor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .panel {
+            flex: 1;
+            min-width: 300px;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        video {
+            width: 100%;
+            border-radius: 4px;
+            background: #000;
+            max-height: 400px;
+        }
+        canvas {
+            display: none;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px 5px 5px 0;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        #status {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .status-running {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status-error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .status-stopped {
+            background: #e2e3e5;
+            color: #383d41;
+        }
+        #landmarks {
+            font-family: monospace;
+            font-size: 11px;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            background: #f9f9f9;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        .landmark-frame {
+            background: #e8f4f8;
+            padding: 8px;
+            margin: 5px 0;
+            border-left: 3px solid #007bff;
+            border-radius: 2px;
+        }
+        h2 {
+            margin-top: 0;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+            margin: 10px 0;
+        }
+        .control-group {
+            display: flex;
+            gap: 5px;
+            align-items: center;
+        }
+        input[type="number"] {
+            width: 60px;
+            padding: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+<h1>🎥 Live Sign Language Landmark Extractor</h1>
+
+<div class="container">
+    <div class="panel">
+        <h2>Camera Feed</h2>
+        <video id="video" autoplay playsinline></video>
+        <canvas id="canvas"></canvas>
+
+        <div class="controls">
+            <button id="startBtn">▶ Start Capture</button>
+            <button id="stopBtn" disabled>⏹ Stop Capture</button>
+            <div class="control-group">
+                <label>FPS:</label>
+                <input type="number" id="fps" value="5" min="1" max="30">
+            </div>
+        </div>
+
+        <div id="status" class="status-stopped">Ready</div>
+    </div>
+
+    <div class="panel">
+        <h2>Extracted Landmarks (Real-time)</h2>
+        <div class="controls">
+            <span id="frameCounter" style="font-weight: bold;">Frames: 0</span>
+            <button id="clearBtn" style="background: #6c757d;">Clear</button>
+        </div>
+        <div id="landmarks">Waiting for frames... Make sure the extractor service is running on http://127.0.0.1:8000</div>
+    </div>
+</div>
+
+<script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const statusDiv = document.getElementById('status');
+    const landmarksDiv = document.getElementById('landmarks');
+    const frameCounterDiv = document.getElementById('frameCounter');
+    const fpsInput = document.getElementById('fps');
+
+    let isCapturing = false;
+    let frameCount = 0;
+    const extractorUrl = 'http://127.0.0.1:8000/extract/image';
+
+    function updateStatus(message, type = 'stopped') {
+        statusDiv.textContent = message;
+        statusDiv.className = `status-${type}`;
+    }
+
+    async function startCapture() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { width: 640, height: 480 }
+            });
+            video.srcObject = stream;
+            isCapturing = true;
+            frameCount = 0;
+            landmarksDiv.innerHTML = '';
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            updateStatus('✓ Capturing & extracting landmarks...', 'running');
+            captureAndExtract();
+        } catch (err) {
+            updateStatus(`❌ Camera error: ${err.message}`, 'error');
+        }
+    }
+
+    function stopCapture() {
+        isCapturing = false;
+        if (video.srcObject) {
+            video.srcObject.getTracks().forEach(track => track.stop());
+        }
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        updateStatus('⏹ Stopped', 'stopped');
+    }
+
+    function captureAndExtract() {
+        if (!isCapturing) return;
+
+        const fps = parseInt(fpsInput.value) || 5;
+        const interval = 1000 / fps;
+        let lastTime = Date.now();
+
+        function captureFrame() {
+            if (!isCapturing) return;
+
+            const now = Date.now();
+            if (now - lastTime >= interval && video.readyState === video.HAVE_ENOUGH_DATA) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                ctx.drawImage(video, 0, 0);
+
+                canvas.toBlob(async (blob) => {
+                    frameCount++;
+                    frameCounterDiv.textContent = `Frames: ${frameCount}`;
+                    await sendFrameToExtractor(blob, frameCount);
+                }, 'image/jpeg', 0.8);
+
+                lastTime = now;
+            }
+
+            requestAnimationFrame(captureFrame);
+        }
+
+        requestAnimationFrame(captureFrame);
+    }
+
+    async function sendFrameToExtractor(blob, frameNum) {
+        try {
+            const formData = new FormData();
+            formData.append('file', blob, `frame_${frameNum}.jpg`);
+
+            const response = await fetch(extractorUrl, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+            displayLandmarks(data, frameNum);
+        } catch (err) {
+            if (frameNum === 1) {
+                updateStatus(`❌ Cannot reach extractor at ${extractorUrl}. Is it running?`, 'error');
+                landmarksDiv.textContent = `Error: ${err.message}\n\nMake sure the extractor is running:\nuvicorn extractor:app --host 127.0.0.1 --port 8000`;
+            }
+        }
+    }
+
+    function displayLandmarks(data, frameNum) {
+        const landmarks = data.landmarks || [];
+
+        // Show first 10 landmark values as a preview
+        const preview = landmarks.slice(0, 10).map(v => v.toFixed(3)).join(', ');
+        const total = landmarks.length;
+
+        const frameDiv = document.createElement('div');
+        frameDiv.className = 'landmark-frame';
+        frameDiv.innerHTML = `<strong>Frame ${frameNum}</strong> (${total} values)<br>Sample: [${preview}...]`;
+
+        landmarksDiv.insertBefore(frameDiv, landmarksDiv.firstChild);
+
+        // Keep only last 50 frames displayed
+        while (landmarksDiv.children.length > 50) {
+            landmarksDiv.removeChild(landmarksDiv.lastChild);
+        }
+    }
+
+    startBtn.addEventListener('click', startCapture);
+    stopBtn.addEventListener('click', stopCapture);
+    clearBtn.addEventListener('click', () => {
+        landmarksDiv.innerHTML = '';
+        frameCount = 0;
+        frameCounterDiv.textContent = 'Frames: 0';
+    });
+
+</script>
+</body>
+</html>

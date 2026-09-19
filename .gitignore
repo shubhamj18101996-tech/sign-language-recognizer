@@ -31,3 +31,32 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Python ###
+# Virtual environments
+.venv/
+.venv311/
+venv/
+env/
+ENV/
+
+# Python cache and compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Training data and models (only exclude raw videos, keep processed data & models)
+mediapipe_service/data/raw/
+# *.npy and *.pt can be committed if needed
+# Uncomment below if you want to exclude them
+# *.npy
+# *.pt
+
+# Logs
+*.log
+
